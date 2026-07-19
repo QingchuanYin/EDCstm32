@@ -51,7 +51,9 @@ void motor_driverInit_TB6612 (motor_t * motor,
 	motor->driver.pGPIO_IN2 = GPIO_IN2;
 	motor->driver.pGPIO_IN2_Pin = GPIO_IN2_PIN;
 	motor->ifDrvInv = ifDrvInv;
-	HAL_GPIO_WritePin(drvGPIO, drvGPIO_Pin, GPIO_PIN_SET);
+	if (drvGPIO != NULL) {
+		HAL_GPIO_WritePin(drvGPIO, drvGPIO_Pin, GPIO_PIN_SET);
+	}
 }
 
 void motor_setRotateDir_TB6612(motor_t * motor, rotateDir_t rotateDir)
@@ -144,6 +146,7 @@ void motor_init_closedloop (motor_t * motor, motor_dataType dataType,
 														uint32_t usTickPeriod,
 														int gearRatio, int ppr, float radius)
 {
+	motor->initStatus = MOTOR_INITING;
 	motor->data.dataType = dataType;
 	motor->pVelPID = velPID;
 	motor->pPosPID = posPID;
@@ -151,15 +154,35 @@ void motor_init_closedloop (motor_t * motor, motor_dataType dataType,
 	motor->encoder.pEncHtim = enchtim;
 	motor->ifCalInv = ifCalInv;
 	motor->tick.usTickPeriod = usTickPeriod;
+	motor->tick.nowTick = 0u;
+	motor->tick.lastTick = 0u;
 	motor->ctrlType = MOTOR_CTRL_NON;
+	motor->data.rotateDir = CLOCKWISE;
+	motor->data.velocity = 0.0f;
+	motor->data.position = 0.0f;
+	motor->data.targetVelo = 0.0f;
+	motor->data.targetPos = 0.0f;
 	
 	motor->param.gearRatio = gearRatio;
 	motor->param.pulsePerRound = ppr;
 	motor->param.rotateRadius_mm = radius;
 	motor->motorChannel = channel;
-	HAL_TIM_PWM_Start(htim, channel);
-	__HAL_TIM_ENABLE_IT(enchtim, TIM_IT_UPDATE);
-	HAL_TIM_Encoder_Start_IT(enchtim, TIM_CHANNEL_ALL);
+	motor->encoder.nowEncCnt = 0u;
+	motor->encoder.lastEncCnt = 0u;
+	motor->encoder.totalEncCnt = 0;
+#if (LOWPASS_FILTER == 1)
+	for (uint8_t i = 0u; i < FILTER_NUM; ++i) {
+		motor->filter.filter[i] = 0.0f;
+	}
+#endif
+	__HAL_TIM_SET_COUNTER(enchtim, 0u);
+	if (HAL_TIM_PWM_Start(htim, channel) != HAL_OK) {
+		return;
+	}
+	if (HAL_TIM_Encoder_Start(enchtim, TIM_CHANNEL_ALL) != HAL_OK) {
+		(void)HAL_TIM_PWM_Stop(htim, channel);
+		return;
+	}
 	
 	motor->initStatus = MOTOR_INIT_OK;
 }
@@ -167,10 +190,14 @@ void motor_init_closedloop (motor_t * motor, motor_dataType dataType,
 void motor_update (motor_t * motor)
 {
 	uint32_t nowTick = motor_getTick(motor);
-	float ts = (nowTick - motor->tick.lastTick) * motor->tick.usTickPeriod * 1e-6;
-	motor->encoder.nowEncCnt = __HAL_TIM_GetCounter(motor->encoder.pEncHtim)
-									 + motor->encoder.encOverflowNum * __HAL_TIM_GetAutoreload(motor->encoder.pEncHtim);
-	motor->encoder.totalEncCnt = motor->encoder.nowEncCnt - motor->encoder.lastEncCnt;
+	uint32_t elapsedTicks = nowTick - motor->tick.lastTick;
+	if ((elapsedTicks == 0u) || (motor->tick.usTickPeriod == 0u)) {
+		return;
+	}
+	float ts = elapsedTicks * motor->tick.usTickPeriod * 1e-6f;
+	motor->encoder.nowEncCnt = (uint16_t)__HAL_TIM_GetCounter(motor->encoder.pEncHtim);
+	motor->encoder.totalEncCnt = (int16_t)(uint16_t)
+		(motor->encoder.nowEncCnt - motor->encoder.lastEncCnt);
 	/*Judge direction*/
 	if(motor->encoder.totalEncCnt > 0) {
 		if (motor->ifCalInv == MOTOR_TRUE) {
@@ -212,21 +239,6 @@ void motor_update (motor_t * motor)
 #endif
 	motor->tick.lastTick = nowTick;
 	motor->encoder.lastEncCnt = motor->encoder.nowEncCnt;
-}
-
-void motor_checkReload(motor_t * motor)
-{
-	if(__HAL_TIM_GetCounter(motor->encoder.pEncHtim) 
-		> 0.5 * __HAL_TIM_GetAutoreload(motor->encoder.pEncHtim)) {	/*Down overflow*/
-		motor->encoder.encOverflowNum--;
-	} else {					/*Up overflow*/
-		motor->encoder.encOverflowNum++;
-	}
-	
-	if(motor_getTime_s(motor) <= 5*1e-1) 	/*Prevent motor jittering at the initialization zero point.*/
-	{
-		motor->encoder.encOverflowNum = 0;
-	}
 }
 
 void motor_arrive_velocity(motor_t * m, float targetVel)

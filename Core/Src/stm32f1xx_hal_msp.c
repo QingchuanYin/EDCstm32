@@ -71,13 +71,136 @@ void HAL_MspInit(void)
 
   /* System interrupt init*/
 
-  /** NOJTAG: JTAG-DP Disabled and SW-DP Enabled
+  /** Apply the board AFIO map, then disable JTAG while keeping SWD enabled.
   */
+  __HAL_AFIO_REMAP_I2C1_ENABLE();
+  __HAL_AFIO_REMAP_TIM1_DISABLE();
+  __HAL_AFIO_REMAP_TIM2_ENABLE();
+  __HAL_AFIO_REMAP_USART1_DISABLE();
   __HAL_AFIO_REMAP_SWJ_NOJTAG();
 
   /* USER CODE BEGIN MspInit 1 */
 
   /* USER CODE END MspInit 1 */
+}
+
+/**
+  * @brief I2C MSP Initialization
+  */
+void HAL_I2C_MspInit(I2C_HandleTypeDef* hi2c)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+  if (hi2c->Instance == I2C1)
+  {
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+
+    GPIO_InitStruct.Pin = MPU6050_SCL_Pin|MPU6050_SDA_Pin;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+    __HAL_RCC_I2C1_CLK_ENABLE();
+  }
+}
+
+/**
+  * @brief TIM PWM MSP Initialization
+  */
+void HAL_TIM_PWM_MspInit(TIM_HandleTypeDef* htim_pwm)
+{
+  if (htim_pwm->Instance == TIM1)
+  {
+    __HAL_RCC_TIM1_CLK_ENABLE();
+  }
+}
+
+/**
+  * @brief TIM Base MSP Initialization
+  */
+void HAL_TIM_Base_MspInit(TIM_HandleTypeDef* htim_base)
+{
+  if (htim_base->Instance == TIM3)
+  {
+    __HAL_RCC_TIM3_CLK_ENABLE();
+  }
+}
+
+/**
+  * @brief TIM Encoder MSP Initialization
+  */
+void HAL_TIM_Encoder_MspInit(TIM_HandleTypeDef* htim_encoder)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+  if (htim_encoder->Instance == TIM2)
+  {
+    __HAL_RCC_TIM2_CLK_ENABLE();
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+
+    GPIO_InitStruct.Pin = MOTOR_B_ENCODER_CH1_Pin;
+    GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    HAL_GPIO_Init(MOTOR_B_ENCODER_CH1_GPIO_Port, &GPIO_InitStruct);
+
+    GPIO_InitStruct.Pin = MOTOR_B_ENCODER_CH2_Pin;
+    HAL_GPIO_Init(MOTOR_B_ENCODER_CH2_GPIO_Port, &GPIO_InitStruct);
+  }
+  else if (htim_encoder->Instance == TIM4)
+  {
+    __HAL_RCC_TIM4_CLK_ENABLE();
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+
+    GPIO_InitStruct.Pin = MOTOR_A_ENCODER_CH1_Pin|MOTOR_A_ENCODER_CH2_Pin;
+    GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  }
+}
+
+/**
+  * @brief TIM GPIO Post Initialization
+  */
+void HAL_TIM_MspPostInit(TIM_HandleTypeDef* htim)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+  if (htim->Instance == TIM1)
+  {
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+
+    GPIO_InitStruct.Pin = PWMB_Pin|PWMA_Pin;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+  }
+}
+
+/**
+  * @brief UART MSP Initialization
+  */
+void HAL_UART_MspInit(UART_HandleTypeDef* huart)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+  if (huart->Instance == USART1)
+  {
+    __HAL_RCC_USART1_CLK_ENABLE();
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+
+    GPIO_InitStruct.Pin = K230_USART1_TX_Pin;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+    HAL_GPIO_Init(K230_USART1_TX_GPIO_Port, &GPIO_InitStruct);
+
+    GPIO_InitStruct.Pin = K230_USART1_RX_Pin;
+    GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    HAL_GPIO_Init(K230_USART1_RX_GPIO_Port, &GPIO_InitStruct);
+  }
 }
 
 /* USER CODE BEGIN 1 */

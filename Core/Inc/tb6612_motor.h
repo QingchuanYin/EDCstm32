@@ -88,10 +88,9 @@ typedef struct motor_data_t
 typedef struct motor_encoder_t
 {
 	TIM_HandleTypeDef * pEncHtim;
-	int lastEncCnt;
-	int nowEncCnt;
-	int totalEncCnt;
-	int encOverflowNum;
+	uint16_t lastEncCnt;
+	uint16_t nowEncCnt;
+	int16_t totalEncCnt;
 }motor_encoder_t;
 
 #if (LOWPASS_FILTER == 1)
@@ -163,7 +162,7 @@ uint32_t motor_channelGetPeriod(motor_t * motor);
 /*Driver functions*/
 #if (TB6612_DRIVER == 1)
 void motor_driverInit_TB6612 (motor_t * motor, 
-															GPIO_TypeDef * drvGPIO,  uint16_t drvGPIO_Pin,		/*STBY PIN*/
+													GPIO_TypeDef * drvGPIO,  uint16_t drvGPIO_Pin,		/*STBY PIN; NULL if hardware-enabled*/
 															GPIO_TypeDef * GPIO_IN1, uint16_t GPIO_IN1_PIN,		/*A/BIN1 PIN*/
 															GPIO_TypeDef * GPIO_IN2, uint16_t GPIO_IN2_PIN,		/*A/BIN2 PIN*/
 															motor_bool ifDrvInv);															/*If driver inverses rotating direction*/
@@ -199,7 +198,6 @@ void motor_init_closedloop (motor_t * motor, motor_dataType dataType,					/*Moto
 														int gearRatio, int ppr, float radius);						/*Set motor parameters*/
 
 void motor_update (motor_t * motor);
-void motor_checkReload(motor_t * motor);
 
 void motor_arrive_velocity(motor_t * m, float targetVel);
 void motor_arrive_position(motor_t * m, float targetPos);

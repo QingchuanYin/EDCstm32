@@ -22,8 +22,8 @@
 | 4 | PC15 | `OLED_SDA` | OLED 数据线 |
 | 5 | PA0 | `L3` | 循迹传感器 L3 |
 | 6 | PA1 | `L2` | 循迹传感器 L2 |
-| 7 | PA2 | `USART2_RX` | USART2 接收；连接陀螺仪模块 TX |
-| 8 | PA3 | `USART2_TX` | USART2 发送；连接陀螺仪模块 RX |
+| 7 | PA2 | `USART2_RX` | 物理连接陀螺仪模块 TX；当前固件不配置、不使用 |
+| 8 | PA3 | `USART2_TX` | 物理连接陀螺仪模块 RX；当前固件不配置、不使用 |
 | 9 | PA4 | `M` | 循迹传感器中间通道 M |
 | 10 | PA5 | `R2` | 循迹传感器 R2 |
 | 11 | PA6 | `R3` | 循迹传感器 R3 |
@@ -46,12 +46,12 @@
 | 38 | 5 V | `5V` | 5 V 电源 |
 | 37 | PB9 | `6050_SDA` | MPU6050 与磁传感器 I2C 数据线 |
 | 36 | PB8 | `6050_SCL` | MPU6050 与磁传感器 I2C 时钟线 |
-| 35 | PB7 | `PB7` | 未连接板载外设，可作 GPIO |
-| 34 | PB6 | `PB6` | 未连接板载外设，可作 GPIO |
+| 35 | PB7 | `PB7` | 电机 A 编码器 CH2（TIM4_CH2） |
+| 34 | PB6 | `PB6` | 电机 A 编码器 CH1（TIM4_CH1） |
 | 33 | PB5 | `L1` | 循迹传感器 L1 |
 | 32 | PB4 | `R1` | 循迹传感器 R1 |
-| 31 | PB3 | `PB3` | 未连接板载外设，可作 GPIO |
-| 30 | PA15 | `PA15` | 未连接板载外设，可作 GPIO |
+| 31 | PB3 | `PB3` | 电机 B 编码器 CH2（TIM2_CH2，全重映射） |
+| 30 | PA15 | `PA15` | 电机 B 编码器 CH1（TIM2_CH1，全重映射） |
 | 29 | PA12 | `KEY2` | 用户按键 KEY2，按下时接 GND |
 | 28 | PA11 | `PWMA` | 电机驱动 A 通道 PWM |
 | 27 | PA10 | `USART1_RX` | USART1 接收；连接 K230 模块 TX |
@@ -69,13 +69,25 @@
 | OLED | `OLED_SCL` = PC14，`OLED_SDA` = PC15 |
 | MPU6050 / 磁传感器 I2C | `6050_SCL` = PB8，`6050_SDA` = PB9 |
 | K230 串口 | `USART1_TX` = PA9，`USART1_RX` = PA10 |
-| 陀螺仪串口 | `USART2_TX` = PA3，`USART2_RX` = PA2 |
+| 陀螺仪串口 | 原理图网络位于 PA2/PA3；当前固件禁用，不配置这两个引脚 |
 | 超声波 | `SR04_TRIG` = PB11，`SR04_ECHO` = PB10 |
-| 电机 A | `PWMA` = PA11，`AIN1` = PB13，`AIN2` = PB12 |
-| 电机 B | `PWMB` = PA8，`BIN1` = PB1，`BIN2` = PB0 |
+| 电机 A | `PWMA` = PA11，`AIN1` = PB13，`AIN2` = PB12，编码器 = PB6/PB7 |
+| 电机 B | `PWMB` = PA8，`BIN1` = PB1，`BIN2` = PB0，编码器 = PA15/PB3 |
 | 用户按键 | `KEY1` = PA7（按下为高），`KEY2` = PA12（按下为低） |
 | 循迹传感器 | `L3` = PA0，`L2` = PA1，`L1` = PB5，`M` = PA4，`R1` = PB4，`R2` = PA5，`R3` = PA6 |
 | 蜂鸣器 | `I/O` = PB14 |
+
+## 定时器与总线资源
+
+| 功能 | 外设配置 |
+| :--- | :--- |
+| 电机 PWM | `PWMB` = TIM1_CH1 / PA8，`PWMA` = TIM1_CH4 / PA11，20 kHz |
+| 电机 A 编码器 | TIM4 编码器模式，CH1 / PB6、CH2 / PB7 |
+| 电机 B 编码器 | TIM2 编码器模式（全重映射），CH1 / PA15、CH2 / PB3 |
+| 超声波回波 | `SR04_ECHO` = PB10 双边沿 EXTI；TIM3 提供 1 MHz 时间基准 |
+| MPU6050 / 磁传感器 | I2C1 重映射到 PB8/PB9，400 kHz |
+| K230 串口 | USART1 / PA9、PA10，115200-8-N-1 |
+| 陀螺仪串口 | 禁用；PA2、PA3 保持未配置状态 |
 
 ## 使用注意
 
@@ -83,8 +95,12 @@
   GPIO 都可直接接入 5 V 信号。
 - `SR04_ECHO` 来自 5 V 供电的 HC-SR04；使用前应确认板上或模块输出是否已做
   3.3 V 电平兼容处理。
-- PA15、PB3、PB4 默认可能被 JTAG 占用。将它们用作普通 GPIO 时，需要关闭
-  JTAG 并保留 SWD 调试接口。
+- PA15、PB3、PB4 默认可能被 JTAG 占用。当前底层关闭 JTAG 并保留 SWD，
+  从而将 PA15/PB3 用于电机 B 编码器、PB4 用于循迹 R1。
+- STM32F103 的硬件 USART2 固定为 PA2=TX、PA3=RX，而本板网络定义为
+  PA2=`USART2_RX`、PA3=`USART2_TX`，两者方向相反，无法通过 AFIO 互换。
+  按当前固件要求，PA2/PA3 不加入 GPIO 或 USART 初始化；若以后需要该接口，
+  必须修改 PCB 接线、飞线交换方向，或另行规划软件 UART 引脚。
 - PC14、PC15 的驱动能力和速度有限，适合当前原理图中的低速 OLED 软件时序，
   不建议用于大电流或高速负载。
 - 同一网络已经连接板载外设时，外接模块不可与板载器件同时以推挽方式驱动该

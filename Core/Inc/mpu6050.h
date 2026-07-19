@@ -9,7 +9,7 @@
 #define MPU6050_H
 
 #include <stdint.h>
-#include "i2c.h"
+#include "main.h"
 
 // MPU6050 structure
 typedef struct

@@ -14,10 +14,10 @@ extern "C" {
 /* 0x3C is the common 7-bit SSD1306 address; I2C write byte is 0x78. */
 #define OLED_I2C_WRITE_ADDR        0x78u
 
-#define OLED_SCL_GPIO_PORT         GPIOC
-#define OLED_SCL_GPIO_PIN          GPIO_PIN_14
-#define OLED_SDA_GPIO_PORT         GPIOC
-#define OLED_SDA_GPIO_PIN          GPIO_PIN_15
+#define OLED_SCL_GPIO_PORT         OLED_SCL_GPIO_Port
+#define OLED_SCL_GPIO_PIN          OLED_SCL_Pin
+#define OLED_SDA_GPIO_PORT         OLED_SDA_GPIO_Port
+#define OLED_SDA_GPIO_PIN          OLED_SDA_Pin
 
 void OLED_Init(void);
 void OLED_Clear(void);
