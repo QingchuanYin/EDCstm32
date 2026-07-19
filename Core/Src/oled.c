@@ -1,5 +1,7 @@
 #include "oled.h"
 
+#include <string.h>
+
 static const uint8_t OLED_Font6x8[][5] = {
     {0x00,0x00,0x00,0x00,0x00}, {0x00,0x00,0x5F,0x00,0x00}, {0x00,0x07,0x00,0x07,0x00}, {0x14,0x7F,0x14,0x7F,0x14},
     {0x24,0x2A,0x7F,0x2A,0x12}, {0x23,0x13,0x08,0x64,0x62}, {0x36,0x49,0x55,0x22,0x50}, {0x00,0x05,0x03,0x00,0x00},
@@ -27,24 +29,44 @@ static const uint8_t OLED_Font6x8[][5] = {
     {0x00,0x00,0x7F,0x00,0x00}, {0x00,0x41,0x36,0x08,0x00}, {0x10,0x08,0x08,0x10,0x08}
 };
 
-static void OLED_Delay(void)
-{
-    uint8_t i;
+static uint8_t OLED_Framebuffer[OLED_PAGE_COUNT][OLED_WIDTH];
+static uint8_t OLED_DirtyMin[OLED_PAGE_COUNT];
+static uint8_t OLED_DirtyMax[OLED_PAGE_COUNT];
 
-    for (i = 0; i < 8; i++)
+__STATIC_FORCEINLINE void OLED_Delay(void)
+{
+    __NOP();
+    __NOP();
+    __NOP();
+    __NOP();
+    __NOP();
+    __NOP();
+    __NOP();
+    __NOP();
+}
+
+__STATIC_FORCEINLINE void OLED_SCL(uint8_t level)
+{
+    if (level != 0u)
     {
-        __NOP();
+        OLED_SCL_GPIO_PORT->BSRR = OLED_SCL_GPIO_PIN;
+    }
+    else
+    {
+        OLED_SCL_GPIO_PORT->BRR = OLED_SCL_GPIO_PIN;
     }
 }
 
-static void OLED_SCL(uint8_t level)
+__STATIC_FORCEINLINE void OLED_SDA(uint8_t level)
 {
-    HAL_GPIO_WritePin(OLED_SCL_GPIO_PORT, OLED_SCL_GPIO_PIN, level ? GPIO_PIN_SET : GPIO_PIN_RESET);
-}
-
-static void OLED_SDA(uint8_t level)
-{
-    HAL_GPIO_WritePin(OLED_SDA_GPIO_PORT, OLED_SDA_GPIO_PIN, level ? GPIO_PIN_SET : GPIO_PIN_RESET);
+    if (level != 0u)
+    {
+        OLED_SDA_GPIO_PORT->BSRR = OLED_SDA_GPIO_PIN;
+    }
+    else
+    {
+        OLED_SDA_GPIO_PORT->BRR = OLED_SDA_GPIO_PIN;
+    }
 }
 
 static void OLED_I2C_Start(void)
@@ -107,6 +129,38 @@ static void OLED_WriteData(uint8_t data)
     OLED_I2C_SendByte(0x40);
     OLED_I2C_SendByte(data);
     OLED_I2C_Stop();
+}
+
+static void OLED_WriteDataBlock(const uint8_t *data, uint16_t length)
+{
+    uint16_t i;
+
+    OLED_I2C_Start();
+    OLED_I2C_SendByte(OLED_I2C_WRITE_ADDR);
+    OLED_I2C_SendByte(0x40);
+    for (i = 0u; i < length; i++)
+    {
+        OLED_I2C_SendByte(data[i]);
+    }
+    OLED_I2C_Stop();
+}
+
+static void OLED_ResetDirty(uint8_t page)
+{
+    OLED_DirtyMin[page] = OLED_WIDTH;
+    OLED_DirtyMax[page] = 0u;
+}
+
+static void OLED_MarkDirty(uint8_t page, uint8_t x)
+{
+    if (x < OLED_DirtyMin[page])
+    {
+        OLED_DirtyMin[page] = x;
+    }
+    if (x > OLED_DirtyMax[page])
+    {
+        OLED_DirtyMax[page] = x;
+    }
 }
 
 static void OLED_GPIO_Init(void)
@@ -188,8 +242,10 @@ void OLED_Fill(uint8_t data)
         OLED_SetPos(0, page);
         for (x = 0; x < OLED_WIDTH; x++)
         {
-            OLED_WriteData(data);
+            OLED_Framebuffer[page][x] = data;
         }
+        OLED_WriteDataBlock(OLED_Framebuffer[page], OLED_WIDTH);
+        OLED_ResetDirty(page);
     }
 }
 
@@ -277,6 +333,113 @@ void OLED_ShowSignedNum(uint8_t x, uint8_t page, int32_t num, uint8_t len)
     }
 
     OLED_ShowNum((uint8_t)(x + 6u), page, abs_num, len);
+}
+
+void OLED_BufferClear(void)
+{
+    uint8_t page;
+    uint8_t x;
+
+    for (page = 0u; page < OLED_PAGE_COUNT; page++)
+    {
+        for (x = 0u; x < OLED_WIDTH; x++)
+        {
+            if (OLED_Framebuffer[page][x] != 0u)
+            {
+                OLED_Framebuffer[page][x] = 0u;
+                OLED_MarkDirty(page, x);
+            }
+        }
+    }
+}
+
+static void OLED_BufferSetPixel(uint8_t x, uint8_t y, uint8_t enabled)
+{
+    uint8_t mask;
+    uint8_t page;
+    uint8_t old_value;
+
+    if ((x >= OLED_WIDTH) || (y >= OLED_HEIGHT))
+    {
+        return;
+    }
+
+    page = y >> 3;
+    mask = (uint8_t)(1u << (y & 0x07u));
+    old_value = OLED_Framebuffer[page][x];
+    if (enabled != 0u)
+    {
+        OLED_Framebuffer[page][x] |= mask;
+    }
+    else
+    {
+        OLED_Framebuffer[page][x] &= (uint8_t)~mask;
+    }
+    if (OLED_Framebuffer[page][x] != old_value)
+    {
+        OLED_MarkDirty(page, x);
+    }
+}
+
+void OLED_BufferShowChar(uint8_t x, uint8_t y, char ch)
+{
+    uint8_t column;
+    uint8_t row;
+    uint8_t index;
+
+    if ((x > (OLED_WIDTH - 6u)) || (y > (OLED_HEIGHT - 7u)))
+    {
+        return;
+    }
+    if ((ch < ' ') || (ch > '~'))
+    {
+        ch = '?';
+    }
+    index = (uint8_t)(ch - ' ');
+
+    for (column = 0u; column < 6u; column++)
+    {
+        uint8_t glyph_column = (column < 5u) ? OLED_Font6x8[index][column] : 0u;
+
+        for (row = 0u; row < 7u; row++)
+        {
+            OLED_BufferSetPixel((uint8_t)(x + column), (uint8_t)(y + row),
+                                (uint8_t)(glyph_column & (uint8_t)(1u << row)));
+        }
+    }
+}
+
+void OLED_BufferShowString(uint8_t x, uint8_t y, const char *str)
+{
+    if (str == NULL)
+    {
+        return;
+    }
+
+    while ((*str != '\0') && (x <= (OLED_WIDTH - 6u)))
+    {
+        OLED_BufferShowChar(x, y, *str);
+        x = (uint8_t)(x + 6u);
+        str++;
+    }
+}
+
+void OLED_BufferFlush(void)
+{
+    uint8_t page;
+
+    for (page = 0u; page < OLED_PAGE_COUNT; page++)
+    {
+        if (OLED_DirtyMin[page] < OLED_WIDTH)
+        {
+            uint8_t first = OLED_DirtyMin[page];
+            uint16_t length = (uint16_t)OLED_DirtyMax[page] - first + 1u;
+
+            OLED_SetPos(first, page);
+            OLED_WriteDataBlock(&OLED_Framebuffer[page][first], length);
+            OLED_ResetDirty(page);
+        }
+    }
 }
 
 void OLED_ShowFullScreenOne(void)

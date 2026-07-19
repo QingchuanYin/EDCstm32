@@ -22,6 +22,8 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "hc_sr04.h"
+#include "imu_tracker.h"
+#include "mpu6050.h"
 #include "oled.h"
 /* USER CODE END Includes */
 
@@ -32,7 +34,10 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define MPU_SAMPLE_INTERVAL_MS  10u
+#define OLED_REFRESH_INTERVAL_MS 50u
+#define MPU_RETRY_INTERVAL_MS   500u
+#define KEY_DEBOUNCE_MS         20u
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -50,6 +55,15 @@ UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
 HC_SR04_HandleTypeDef hsr04;
+MPU6050_t mpu6050;
+IMU_Tracker_t imu_tracker;
+static uint8_t mpu_ready;
+static uint8_t key_candidate_pressed;
+static uint8_t key_stable_pressed;
+static uint32_t key_change_tick;
+static uint32_t last_sample_tick;
+static uint32_t last_display_tick;
+static uint32_t last_retry_tick;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -63,11 +77,147 @@ static void MX_TIM4_Init(void);
 static void MX_USART1_UART_Init(void);
 void HAL_TIM_MspPostInit(TIM_HandleTypeDef* htim);
 /* USER CODE BEGIN PFP */
-
+static void App_HandleKey(uint32_t now);
+static void App_ShowMeasurements(void);
+static void App_ShowMpuError(void);
+static uint8_t App_TryInitMpu(uint32_t now);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+static uint32_t App_Pow10(uint8_t exponent)
+{
+  uint32_t result = 1u;
+
+  while (exponent > 0u)
+  {
+    result *= 10u;
+    exponent--;
+  }
+  return result;
+}
+
+static void App_FormatAxisValue(char *line, char type, char axis, float value,
+                                uint8_t whole_digits, uint8_t fraction_digits,
+                                const char *unit)
+{
+  uint8_t digit;
+  uint8_t index = 0u;
+  uint8_t total_digits = (uint8_t)(whole_digits + fraction_digits);
+  uint32_t scale = App_Pow10(fraction_digits);
+  uint32_t limit = App_Pow10(total_digits) - 1u;
+  uint32_t divisor = App_Pow10((uint8_t)(total_digits - 1u));
+  uint32_t scaled;
+  float magnitude = value;
+
+  line[index++] = type;
+  line[index++] = axis;
+  line[index++] = ':';
+  if (magnitude < 0.0f)
+  {
+    line[index++] = '-';
+    magnitude = -magnitude;
+  }
+  else
+  {
+    line[index++] = '+';
+  }
+
+  if (magnitude >= ((float)limit / (float)scale))
+  {
+    scaled = limit;
+  }
+  else
+  {
+    scaled = (uint32_t)(magnitude * (float)scale + 0.5f);
+  }
+
+  for (digit = 0u; digit < total_digits; digit++)
+  {
+    if (digit == whole_digits)
+    {
+      line[index++] = '.';
+    }
+    line[index++] = (char)('0' + (scaled / divisor) % 10u);
+    divisor /= 10u;
+  }
+
+  while (*unit != '\0')
+  {
+    line[index++] = *unit++;
+  }
+  line[index] = '\0';
+}
+
+static void App_DrawAxisLine(uint8_t row, char type, char axis, float value,
+                             uint8_t whole_digits, uint8_t fraction_digits,
+                             const char *unit)
+{
+  char line[22];
+
+  App_FormatAxisValue(line, type, axis, value, whole_digits, fraction_digits, unit);
+  OLED_BufferShowString(0u, (uint8_t)(row * 7u), line);
+}
+
+static void App_ShowMeasurements(void)
+{
+  OLED_BufferClear();
+  App_DrawAxisLine(0u, 'A', 'X', (float)mpu6050.Ax, 1u, 3u, "g");
+  App_DrawAxisLine(1u, 'A', 'Y', (float)mpu6050.Ay, 1u, 3u, "g");
+  App_DrawAxisLine(2u, 'A', 'Z', (float)mpu6050.Az, 1u, 3u, "g");
+  App_DrawAxisLine(3u, 'G', 'X', (float)mpu6050.Gx, 3u, 1u, "d/s");
+  App_DrawAxisLine(4u, 'G', 'Y', (float)mpu6050.Gy, 3u, 1u, "d/s");
+  App_DrawAxisLine(5u, 'G', 'Z', (float)mpu6050.Gz, 3u, 1u, "d/s");
+  App_DrawAxisLine(6u, 'P', 'X', imu_tracker.position[0], 3u, 3u, "m");
+  App_DrawAxisLine(7u, 'P', 'Y', imu_tracker.position[1], 3u, 3u, "m");
+  App_DrawAxisLine(8u, 'P', 'Z', imu_tracker.position[2], 3u, 3u, "m");
+  OLED_BufferFlush();
+}
+
+static void App_ShowMpuError(void)
+{
+  OLED_BufferClear();
+  OLED_BufferShowString(22u, 21u, "MPU6050 ERROR");
+  OLED_BufferShowString(25u, 35u, "RETRYING...");
+  OLED_BufferFlush();
+}
+
+static void App_HandleKey(uint32_t now)
+{
+  uint8_t pressed = (HAL_GPIO_ReadPin(KEY1_GPIO_Port, KEY1_Pin) == GPIO_PIN_SET) ? 1u : 0u;
+
+  if (pressed != key_candidate_pressed)
+  {
+    key_candidate_pressed = pressed;
+    key_change_tick = now;
+  }
+  else if ((pressed != key_stable_pressed) &&
+           ((uint32_t)(now - key_change_tick) >= KEY_DEBOUNCE_MS))
+  {
+    key_stable_pressed = pressed;
+    if (key_stable_pressed != 0u)
+    {
+      IMU_Tracker_ResetPosition(&imu_tracker);
+      last_display_tick = now - OLED_REFRESH_INTERVAL_MS;
+    }
+  }
+}
+
+static uint8_t App_TryInitMpu(uint32_t now)
+{
+  if (MPU6050_Init(&hi2c1) != HAL_OK)
+  {
+    return 0u;
+  }
+  if (MPU6050_Read_All(&hi2c1, &mpu6050) != HAL_OK)
+  {
+    return 0u;
+  }
+
+  IMU_Tracker_Update(&imu_tracker, &mpu6050, MPU_SAMPLE_INTERVAL_MS);
+  last_sample_tick = now;
+  return 1u;
+}
 
 /* USER CODE END 0 */
 
@@ -115,13 +265,66 @@ int main(void)
   }
 
   OLED_Init();
-  OLED_ShowFullScreenOne();
+  IMU_Tracker_Init(&imu_tracker);
+
+  key_candidate_pressed =
+      (HAL_GPIO_ReadPin(KEY1_GPIO_Port, KEY1_Pin) == GPIO_PIN_SET) ? 1u : 0u;
+  key_stable_pressed = key_candidate_pressed;
+  key_change_tick = HAL_GetTick();
+  last_sample_tick = HAL_GetTick();
+  last_display_tick = last_sample_tick - OLED_REFRESH_INTERVAL_MS;
+  last_retry_tick = last_sample_tick;
+  mpu_ready = App_TryInitMpu(last_sample_tick);
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+    uint32_t now = HAL_GetTick();
+
+    App_HandleKey(now);
+
+    if (mpu_ready != 0u)
+    {
+      uint32_t elapsed = (uint32_t)(now - last_sample_tick);
+
+      if (elapsed >= MPU_SAMPLE_INTERVAL_MS)
+      {
+        last_sample_tick = now;
+        if (MPU6050_Read_All(&hi2c1, &mpu6050) == HAL_OK)
+        {
+          IMU_Tracker_Update(&imu_tracker, &mpu6050, elapsed);
+        }
+        else
+        {
+          mpu_ready = 0u;
+          last_retry_tick = now;
+          IMU_Tracker_PrepareRecovery(&imu_tracker);
+        }
+      }
+    }
+    else if ((uint32_t)(now - last_retry_tick) >= MPU_RETRY_INTERVAL_MS)
+    {
+      last_retry_tick = now;
+      if (App_TryInitMpu(now) != 0u)
+      {
+        mpu_ready = 1u;
+      }
+    }
+
+    if ((uint32_t)(now - last_display_tick) >= OLED_REFRESH_INTERVAL_MS)
+    {
+      last_display_tick = now;
+      if (mpu_ready != 0u)
+      {
+        App_ShowMeasurements();
+      }
+      else
+      {
+        App_ShowMpuError();
+      }
+    }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
