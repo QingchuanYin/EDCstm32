@@ -46,6 +46,15 @@ typedef struct
     double P[2][2];
 } Kalman_t;
 
+typedef enum
+{
+    MPU6050_ERROR_NONE = 0,
+    MPU6050_ERROR_NOT_FOUND,
+    MPU6050_ERROR_BAD_ID,
+    MPU6050_ERROR_CONFIG,
+    MPU6050_ERROR_READ
+} MPU6050_Error_t;
+
 HAL_StatusTypeDef MPU6050_Init(I2C_HandleTypeDef *I2Cx);
 
 HAL_StatusTypeDef MPU6050_Read_Accel(I2C_HandleTypeDef *I2Cx, MPU6050_t *DataStruct);
@@ -55,6 +64,11 @@ HAL_StatusTypeDef MPU6050_Read_Gyro(I2C_HandleTypeDef *I2Cx, MPU6050_t *DataStru
 HAL_StatusTypeDef MPU6050_Read_Temp(I2C_HandleTypeDef *I2Cx, MPU6050_t *DataStruct);
 
 HAL_StatusTypeDef MPU6050_Read_All(I2C_HandleTypeDef *I2Cx, MPU6050_t *DataStruct);
+
+MPU6050_Error_t MPU6050_GetLastError(void);
+uint32_t MPU6050_GetLastI2CError(void);
+uint8_t MPU6050_GetDeviceAddress(void);
+uint8_t MPU6050_GetWhoAmI(void);
 
 double Kalman_getAngle(Kalman_t *Kalman, double newAngle, double newRate, double dt);
 

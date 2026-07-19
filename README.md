@@ -37,7 +37,7 @@
 | 电机 A 编码器 | TIM4_CH1 / PB6，TIM4_CH2 / PB7 |
 | 电机 B 编码器 | TIM2 全重映射，CH1 / PA15，CH2 / PB3 |
 | 超声波回波 | PB10 双边沿 EXTI，TIM3 提供 1 MHz 时间基准 |
-| MPU6050 / I2C 设备 | I2C1 重映射至 PB8/PB9，400 kHz |
+| MPU6050 / I2C 设备 | I2C1 重映射至 PB8/PB9，100 kHz |
 | K230 | USART1 / PA9、PA10，115200-8-N-1 |
 | OLED | PC14 / PC15 软件 I2C |
 

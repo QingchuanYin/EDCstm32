@@ -29,7 +29,16 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
+typedef struct
+{
+  float accel[3];
+  float gyro[3];
+  float gyro_sum[3];
+  float gyro_bias[3];
+  uint16_t calibration_samples;
+  uint8_t initialized;
+  uint8_t calibrated;
+} App_IMUFilter_t;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -38,6 +47,13 @@
 #define OLED_REFRESH_INTERVAL_MS 50u
 #define MPU_RETRY_INTERVAL_MS   500u
 #define KEY_DEBOUNCE_MS         20u
+#define IMU_CALIBRATION_SAMPLES 100u
+#define IMU_FILTER_ALPHA        0.20f
+#define IMU_DISPLAY_ACCEL_STEP  0.01f
+#define IMU_DISPLAY_ACCEL_HYST  0.015f
+#define IMU_DISPLAY_GYRO_STEP   0.1f
+#define IMU_DISPLAY_GYRO_HYST   0.3f
+#define IMU_DISPLAY_GYRO_ZERO   0.3f
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -64,6 +80,12 @@ static uint32_t key_change_tick;
 static uint32_t last_sample_tick;
 static uint32_t last_display_tick;
 static uint32_t last_retry_tick;
+static uint32_t key_feedback_tick;
+static uint8_t key_feedback_active;
+static App_IMUFilter_t imu_filter;
+static float displayed_accel[3];
+static float displayed_gyro[3];
+static uint8_t displayed_imu_initialized;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -79,8 +101,11 @@ void HAL_TIM_MspPostInit(TIM_HandleTypeDef* htim);
 /* USER CODE BEGIN PFP */
 static void App_HandleKey(uint32_t now);
 static void App_ShowMeasurements(void);
-static void App_ShowMpuError(void);
+static void App_ShowMpuError(uint32_t now);
 static uint8_t App_TryInitMpu(uint32_t now);
+static void App_RecoverI2cBus(void);
+static void App_ResetImuFilter(void);
+static uint8_t App_FilterMpuSample(MPU6050_t *sample);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -95,6 +120,152 @@ static uint32_t App_Pow10(uint8_t exponent)
     exponent--;
   }
   return result;
+}
+
+static float App_AbsFloat(float value)
+{
+  return (value < 0.0f) ? -value : value;
+}
+
+static float App_QuantizeFloat(float value, float step)
+{
+  float scaled = value / step;
+  int32_t rounded = (scaled < 0.0f) ? (int32_t)(scaled - 0.5f) :
+                                      (int32_t)(scaled + 0.5f);
+
+  return (float)rounded * step;
+}
+
+static void App_ResetImuFilter(void)
+{
+  uint8_t axis;
+
+  for (axis = 0u; axis < 3u; axis++)
+  {
+    imu_filter.accel[axis] = 0.0f;
+    imu_filter.gyro[axis] = 0.0f;
+    imu_filter.gyro_sum[axis] = 0.0f;
+    imu_filter.gyro_bias[axis] = 0.0f;
+  }
+  imu_filter.calibration_samples = 0u;
+  imu_filter.initialized = 0u;
+  imu_filter.calibrated = 0u;
+  displayed_imu_initialized = 0u;
+}
+
+static uint8_t App_FilterMpuSample(MPU6050_t *sample)
+{
+  float raw_accel[3];
+  float raw_gyro[3];
+  float accel_norm_squared;
+  float gyro_norm_squared;
+  uint8_t axis;
+
+  raw_accel[0] = (float)sample->Ax;
+  raw_accel[1] = (float)sample->Ay;
+  raw_accel[2] = (float)sample->Az;
+  raw_gyro[0] = (float)sample->Gx;
+  raw_gyro[1] = (float)sample->Gy;
+  raw_gyro[2] = (float)sample->Gz;
+  accel_norm_squared = raw_accel[0] * raw_accel[0] +
+                       raw_accel[1] * raw_accel[1] +
+                       raw_accel[2] * raw_accel[2];
+  gyro_norm_squared = raw_gyro[0] * raw_gyro[0] +
+                      raw_gyro[1] * raw_gyro[1] +
+                      raw_gyro[2] * raw_gyro[2];
+
+  if (imu_filter.initialized == 0u)
+  {
+    for (axis = 0u; axis < 3u; axis++)
+    {
+      imu_filter.accel[axis] = raw_accel[axis];
+      imu_filter.gyro[axis] = 0.0f;
+    }
+    imu_filter.initialized = 1u;
+  }
+
+  if (imu_filter.calibrated == 0u)
+  {
+    /* Only accept calibration samples while the module is approximately still. */
+    if ((accel_norm_squared > 0.64f) && (accel_norm_squared < 1.44f) &&
+        (gyro_norm_squared < 400.0f))
+    {
+      imu_filter.calibration_samples++;
+      for (axis = 0u; axis < 3u; axis++)
+      {
+        imu_filter.gyro_sum[axis] += raw_gyro[axis];
+        imu_filter.gyro_bias[axis] = imu_filter.gyro_sum[axis] /
+                                       (float)imu_filter.calibration_samples;
+      }
+      if (imu_filter.calibration_samples >= IMU_CALIBRATION_SAMPLES)
+      {
+        imu_filter.calibrated = 1u;
+        displayed_imu_initialized = 0u;
+        IMU_Tracker_PrepareRecovery(&imu_tracker);
+      }
+    }
+    else
+    {
+      for (axis = 0u; axis < 3u; axis++)
+      {
+        imu_filter.gyro_sum[axis] = 0.0f;
+        imu_filter.gyro_bias[axis] = 0.0f;
+      }
+      imu_filter.calibration_samples = 0u;
+    }
+  }
+
+  for (axis = 0u; axis < 3u; axis++)
+  {
+    float corrected_gyro = raw_gyro[axis] - imu_filter.gyro_bias[axis];
+
+    imu_filter.accel[axis] += IMU_FILTER_ALPHA *
+                              (raw_accel[axis] - imu_filter.accel[axis]);
+    imu_filter.gyro[axis] += IMU_FILTER_ALPHA *
+                             (corrected_gyro - imu_filter.gyro[axis]);
+  }
+
+  sample->Ax = imu_filter.accel[0];
+  sample->Ay = imu_filter.accel[1];
+  sample->Az = imu_filter.accel[2];
+  sample->Gx = imu_filter.gyro[0];
+  sample->Gy = imu_filter.gyro[1];
+  sample->Gz = imu_filter.gyro[2];
+  return imu_filter.calibrated;
+}
+
+static void App_UpdateDisplayedImu(void)
+{
+  const float accel[3] = {(float)mpu6050.Ax, (float)mpu6050.Ay, (float)mpu6050.Az};
+  const float gyro[3] = {(float)mpu6050.Gx, (float)mpu6050.Gy, (float)mpu6050.Gz};
+  uint8_t axis;
+
+  if (displayed_imu_initialized == 0u)
+  {
+    for (axis = 0u; axis < 3u; axis++)
+    {
+      displayed_accel[axis] = App_QuantizeFloat(accel[axis], IMU_DISPLAY_ACCEL_STEP);
+      displayed_gyro[axis] = (App_AbsFloat(gyro[axis]) < IMU_DISPLAY_GYRO_ZERO) ? 0.0f :
+                             App_QuantizeFloat(gyro[axis], IMU_DISPLAY_GYRO_STEP);
+    }
+    displayed_imu_initialized = 1u;
+    return;
+  }
+
+  for (axis = 0u; axis < 3u; axis++)
+  {
+    float gyro_target = (App_AbsFloat(gyro[axis]) < IMU_DISPLAY_GYRO_ZERO) ? 0.0f :
+                        gyro[axis];
+
+    if (App_AbsFloat(accel[axis] - displayed_accel[axis]) >= IMU_DISPLAY_ACCEL_HYST)
+    {
+      displayed_accel[axis] = App_QuantizeFloat(accel[axis], IMU_DISPLAY_ACCEL_STEP);
+    }
+    if (App_AbsFloat(gyro_target - displayed_gyro[axis]) >= IMU_DISPLAY_GYRO_HYST)
+    {
+      displayed_gyro[axis] = App_QuantizeFloat(gyro_target, IMU_DISPLAY_GYRO_STEP);
+    }
+  }
 }
 
 static void App_FormatAxisValue(char *line, char type, char axis, float value,
@@ -161,24 +332,78 @@ static void App_DrawAxisLine(uint8_t row, char type, char axis, float value,
 
 static void App_ShowMeasurements(void)
 {
+  App_UpdateDisplayedImu();
   OLED_BufferClear();
-  App_DrawAxisLine(0u, 'A', 'X', (float)mpu6050.Ax, 1u, 3u, "g");
-  App_DrawAxisLine(1u, 'A', 'Y', (float)mpu6050.Ay, 1u, 3u, "g");
-  App_DrawAxisLine(2u, 'A', 'Z', (float)mpu6050.Az, 1u, 3u, "g");
-  App_DrawAxisLine(3u, 'G', 'X', (float)mpu6050.Gx, 3u, 1u, "d/s");
-  App_DrawAxisLine(4u, 'G', 'Y', (float)mpu6050.Gy, 3u, 1u, "d/s");
-  App_DrawAxisLine(5u, 'G', 'Z', (float)mpu6050.Gz, 3u, 1u, "d/s");
+  App_DrawAxisLine(0u, 'A', 'X', displayed_accel[0], 1u, 2u, "g");
+  App_DrawAxisLine(1u, 'A', 'Y', displayed_accel[1], 1u, 2u, "g");
+  App_DrawAxisLine(2u, 'A', 'Z', displayed_accel[2], 1u, 2u, "g");
+  App_DrawAxisLine(3u, 'G', 'X', displayed_gyro[0], 3u, 1u, "d/s");
+  App_DrawAxisLine(4u, 'G', 'Y', displayed_gyro[1], 3u, 1u, "d/s");
+  App_DrawAxisLine(5u, 'G', 'Z', displayed_gyro[2], 3u, 1u, "d/s");
   App_DrawAxisLine(6u, 'P', 'X', imu_tracker.position[0], 3u, 3u, "m");
   App_DrawAxisLine(7u, 'P', 'Y', imu_tracker.position[1], 3u, 3u, "m");
   App_DrawAxisLine(8u, 'P', 'Z', imu_tracker.position[2], 3u, 3u, "m");
   OLED_BufferFlush();
 }
 
-static void App_ShowMpuError(void)
+static void App_FormatHex(char *line, const char *prefix, uint32_t value, uint8_t digits)
 {
+  static const char hex[] = "0123456789ABCDEF";
+  uint8_t index = 0u;
+  uint8_t digit;
+
+  while (*prefix != '\0')
+  {
+    line[index++] = *prefix++;
+  }
+  for (digit = 0u; digit < digits; digit++)
+  {
+    uint8_t shift = (uint8_t)((digits - digit - 1u) * 4u);
+    line[index++] = hex[(value >> shift) & 0x0Fu];
+  }
+  line[index] = '\0';
+}
+
+static const char *App_GetMpuErrorText(void)
+{
+  switch (MPU6050_GetLastError())
+  {
+    case MPU6050_ERROR_BAD_ID:
+      return "STAGE:BAD ID";
+    case MPU6050_ERROR_CONFIG:
+      return "STAGE:CONFIG";
+    case MPU6050_ERROR_READ:
+      return "STAGE:READ";
+    case MPU6050_ERROR_NOT_FOUND:
+    default:
+      return "STAGE:NO DEVICE";
+  }
+}
+
+static void App_ShowMpuError(uint32_t now)
+{
+  char line[22];
+
   OLED_BufferClear();
-  OLED_BufferShowString(22u, 21u, "MPU6050 ERROR");
-  OLED_BufferShowString(25u, 35u, "RETRYING...");
+  OLED_BufferShowString(0u, 0u, "MPU6050 ERROR");
+  OLED_BufferShowString(0u, 14u, App_GetMpuErrorText());
+  App_FormatHex(line, "I2C:", MPU6050_GetLastI2CError(), 8u);
+  OLED_BufferShowString(0u, 21u, line);
+  App_FormatHex(line, "ADDR:", MPU6050_GetDeviceAddress(), 2u);
+  OLED_BufferShowString(0u, 28u, line);
+  App_FormatHex(line, "ID:", MPU6050_GetWhoAmI(), 2u);
+  OLED_BufferShowString(60u, 28u, line);
+  OLED_BufferShowString(0u, 42u, "RETRY 68/69 100K");
+  if ((key_feedback_active != 0u) &&
+      ((uint32_t)(now - key_feedback_tick) < 500u))
+  {
+    OLED_BufferShowString(0u, 56u, "KEY1 DETECTED");
+  }
+  else
+  {
+    key_feedback_active = 0u;
+    OLED_BufferShowString(0u, 56u, "CHECK PB8/PB9");
+  }
   OLED_BufferFlush();
 }
 
@@ -198,23 +423,78 @@ static void App_HandleKey(uint32_t now)
     if (key_stable_pressed != 0u)
     {
       IMU_Tracker_ResetPosition(&imu_tracker);
+      key_feedback_tick = now;
+      key_feedback_active = 1u;
       last_display_tick = now - OLED_REFRESH_INTERVAL_MS;
     }
   }
+}
+
+static void App_I2cRecoveryDelay(void)
+{
+  volatile uint32_t delay;
+
+  for (delay = 0u; delay < 64u; delay++)
+  {
+    __NOP();
+  }
+}
+
+static void App_RecoverI2cBus(void)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  uint8_t pulse;
+
+  __HAL_I2C_DISABLE(&hi2c1);
+  __HAL_RCC_I2C1_FORCE_RESET();
+  __HAL_RCC_I2C1_RELEASE_RESET();
+
+  GPIO_InitStruct.Pin = MPU6050_SCL_Pin | MPU6050_SDA_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  HAL_GPIO_WritePin(GPIOB, MPU6050_SCL_Pin | MPU6050_SDA_Pin, GPIO_PIN_SET);
+  App_I2cRecoveryDelay();
+  for (pulse = 0u; pulse < 9u; pulse++)
+  {
+    HAL_GPIO_WritePin(GPIOB, MPU6050_SCL_Pin, GPIO_PIN_RESET);
+    App_I2cRecoveryDelay();
+    HAL_GPIO_WritePin(GPIOB, MPU6050_SCL_Pin, GPIO_PIN_SET);
+    App_I2cRecoveryDelay();
+  }
+
+  HAL_GPIO_WritePin(GPIOB, MPU6050_SDA_Pin, GPIO_PIN_RESET);
+  App_I2cRecoveryDelay();
+  HAL_GPIO_WritePin(GPIOB, MPU6050_SCL_Pin, GPIO_PIN_SET);
+  App_I2cRecoveryDelay();
+  HAL_GPIO_WritePin(GPIOB, MPU6050_SDA_Pin, GPIO_PIN_SET);
+  App_I2cRecoveryDelay();
+
+  hi2c1.State = HAL_I2C_STATE_RESET;
+  MX_I2C1_Init();
 }
 
 static uint8_t App_TryInitMpu(uint32_t now)
 {
   if (MPU6050_Init(&hi2c1) != HAL_OK)
   {
-    return 0u;
+    App_RecoverI2cBus();
+    if (MPU6050_Init(&hi2c1) != HAL_OK)
+    {
+      return 0u;
+    }
   }
   if (MPU6050_Read_All(&hi2c1, &mpu6050) != HAL_OK)
   {
     return 0u;
   }
 
-  IMU_Tracker_Update(&imu_tracker, &mpu6050, MPU_SAMPLE_INTERVAL_MS);
+  if (App_FilterMpuSample(&mpu6050) != 0u)
+  {
+    IMU_Tracker_Update(&imu_tracker, &mpu6050, MPU_SAMPLE_INTERVAL_MS);
+  }
   last_sample_tick = now;
   return 1u;
 }
@@ -266,6 +546,7 @@ int main(void)
 
   OLED_Init();
   IMU_Tracker_Init(&imu_tracker);
+  App_ResetImuFilter();
 
   key_candidate_pressed =
       (HAL_GPIO_ReadPin(KEY1_GPIO_Port, KEY1_Pin) == GPIO_PIN_SET) ? 1u : 0u;
@@ -294,13 +575,17 @@ int main(void)
         last_sample_tick = now;
         if (MPU6050_Read_All(&hi2c1, &mpu6050) == HAL_OK)
         {
-          IMU_Tracker_Update(&imu_tracker, &mpu6050, elapsed);
+          if (App_FilterMpuSample(&mpu6050) != 0u)
+          {
+            IMU_Tracker_Update(&imu_tracker, &mpu6050, elapsed);
+          }
         }
         else
         {
           mpu_ready = 0u;
           last_retry_tick = now;
           IMU_Tracker_PrepareRecovery(&imu_tracker);
+          App_ResetImuFilter();
         }
       }
     }
@@ -322,7 +607,7 @@ int main(void)
       }
       else
       {
-        App_ShowMpuError();
+        App_ShowMpuError(now);
       }
     }
     /* USER CODE END WHILE */
@@ -339,7 +624,7 @@ int main(void)
 static void MX_I2C1_Init(void)
 {
   hi2c1.Instance = I2C1;
-  hi2c1.Init.ClockSpeed = 400000;
+  hi2c1.Init.ClockSpeed = 100000;
   hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
   hi2c1.Init.OwnAddress1 = 0;
   hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;

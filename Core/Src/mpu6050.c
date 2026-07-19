@@ -46,9 +46,11 @@
 #define GYRO_CONFIG_REG 0x1B
 #define GYRO_XOUT_H_REG 0x43
 
-// Setup MPU6050
-#define MPU6050_ADDR 0xD0
 static const uint16_t i2c_timeout = 20;
+static uint16_t mpu6050_address = (0x68u << 1);
+static uint8_t mpu6050_who_am_i;
+static MPU6050_Error_t mpu6050_last_error;
+static uint32_t mpu6050_last_i2c_error;
 
 uint32_t timer;
 
@@ -63,60 +65,115 @@ Kalman_t KalmanY = {
     .R_measure = 0.03f,
 };
 
+static uint8_t MPU6050_IsSupportedId(uint8_t id)
+{
+    /* Some modules sold as MPU6050 use an MPU6500-compatible die (WHO_AM_I=0x70). */
+    return ((id == 0x68u) || (id == 0x70u)) ? 1u : 0u;
+}
+
 HAL_StatusTypeDef MPU6050_Init(I2C_HandleTypeDef *I2Cx)
 {
+    static const uint16_t addresses[] = {(0x68u << 1), (0x69u << 1)};
     uint8_t check = 0u;
     uint8_t Data;
+    uint8_t index;
+    uint8_t device_responded = 0u;
     HAL_StatusTypeDef status;
 
-    // check device ID WHO_AM_I
-    status = HAL_I2C_Mem_Read(I2Cx, MPU6050_ADDR, WHO_AM_I_REG,
-                              I2C_MEMADD_SIZE_8BIT, &check, 1, i2c_timeout);
-    if ((status != HAL_OK) || (check != 0x68u))
+    if (I2Cx == NULL)
     {
+        return HAL_ERROR;
+    }
+
+    mpu6050_last_error = MPU6050_ERROR_NOT_FOUND;
+    mpu6050_last_i2c_error = HAL_I2C_ERROR_NONE;
+    mpu6050_address = 0u;
+    mpu6050_who_am_i = 0u;
+
+    for (index = 0u; index < (uint8_t)(sizeof(addresses) / sizeof(addresses[0])); index++)
+    {
+        check = 0u;
+        status = HAL_I2C_Mem_Read(I2Cx, addresses[index], WHO_AM_I_REG,
+                                  I2C_MEMADD_SIZE_8BIT, &check, 1, i2c_timeout);
+        if (status == HAL_OK)
+        {
+            device_responded = 1u;
+            mpu6050_address = addresses[index];
+            mpu6050_who_am_i = check;
+            mpu6050_last_i2c_error = HAL_I2C_ERROR_NONE;
+            if (MPU6050_IsSupportedId(check) != 0u)
+            {
+                break;
+            }
+        }
+        else
+        {
+            mpu6050_last_i2c_error = HAL_I2C_GetError(I2Cx);
+        }
+    }
+
+    if (MPU6050_IsSupportedId(check) == 0u)
+    {
+        mpu6050_last_error = (device_responded != 0u) ? MPU6050_ERROR_BAD_ID :
+                                                      MPU6050_ERROR_NOT_FOUND;
         return HAL_ERROR;
     }
 
     /* Wake the device and use the X gyro PLL as the clock source. */
     Data = 0x01u;
-    status = HAL_I2C_Mem_Write(I2Cx, MPU6050_ADDR, PWR_MGMT_1_REG,
+    status = HAL_I2C_Mem_Write(I2Cx, mpu6050_address, PWR_MGMT_1_REG,
                                I2C_MEMADD_SIZE_8BIT, &Data, 1, i2c_timeout);
     if (status != HAL_OK)
     {
+        mpu6050_last_error = MPU6050_ERROR_CONFIG;
+        mpu6050_last_i2c_error = HAL_I2C_GetError(I2Cx);
         return status;
     }
 
     /* DLPF_CFG=3 gives about 44 Hz accelerometer/gyro bandwidth. */
     Data = 0x03u;
-    status = HAL_I2C_Mem_Write(I2Cx, MPU6050_ADDR, CONFIG_REG,
+    status = HAL_I2C_Mem_Write(I2Cx, mpu6050_address, CONFIG_REG,
                                I2C_MEMADD_SIZE_8BIT, &Data, 1, i2c_timeout);
     if (status != HAL_OK)
     {
+        mpu6050_last_error = MPU6050_ERROR_CONFIG;
+        mpu6050_last_i2c_error = HAL_I2C_GetError(I2Cx);
         return status;
     }
 
     /* With DLPF enabled, 1 kHz / (1 + 9) gives a 100 Hz sample rate. */
     Data = 0x09u;
-    status = HAL_I2C_Mem_Write(I2Cx, MPU6050_ADDR, SMPLRT_DIV_REG,
+    status = HAL_I2C_Mem_Write(I2Cx, mpu6050_address, SMPLRT_DIV_REG,
                                I2C_MEMADD_SIZE_8BIT, &Data, 1, i2c_timeout);
     if (status != HAL_OK)
     {
+        mpu6050_last_error = MPU6050_ERROR_CONFIG;
+        mpu6050_last_i2c_error = HAL_I2C_GetError(I2Cx);
         return status;
     }
 
     /* Accelerometer +/-2 g and gyro +/-250 degrees/s. */
     Data = 0x00u;
-    status = HAL_I2C_Mem_Write(I2Cx, MPU6050_ADDR, ACCEL_CONFIG_REG,
+    status = HAL_I2C_Mem_Write(I2Cx, mpu6050_address, ACCEL_CONFIG_REG,
                                I2C_MEMADD_SIZE_8BIT, &Data, 1, i2c_timeout);
     if (status != HAL_OK)
     {
+        mpu6050_last_error = MPU6050_ERROR_CONFIG;
+        mpu6050_last_i2c_error = HAL_I2C_GetError(I2Cx);
         return status;
     }
-    status = HAL_I2C_Mem_Write(I2Cx, MPU6050_ADDR, GYRO_CONFIG_REG,
+    status = HAL_I2C_Mem_Write(I2Cx, mpu6050_address, GYRO_CONFIG_REG,
                                I2C_MEMADD_SIZE_8BIT, &Data, 1, i2c_timeout);
     if (status == HAL_OK)
     {
         timer = HAL_GetTick();
+        mpu6050_last_error = MPU6050_ERROR_NONE;
+        mpu6050_last_i2c_error = HAL_I2C_ERROR_NONE;
+    }
+    else
+    {
+        mpu6050_last_error = MPU6050_ERROR_CONFIG;
+        mpu6050_last_i2c_error = HAL_I2C_GetError(I2Cx);
     }
     return status;
 }
@@ -128,10 +185,12 @@ HAL_StatusTypeDef MPU6050_Read_Accel(I2C_HandleTypeDef *I2Cx, MPU6050_t *DataStr
 
     // Read 6 BYTES of data starting from ACCEL_XOUT_H register
 
-    status = HAL_I2C_Mem_Read(I2Cx, MPU6050_ADDR, ACCEL_XOUT_H_REG,
+    status = HAL_I2C_Mem_Read(I2Cx, mpu6050_address, ACCEL_XOUT_H_REG,
                               I2C_MEMADD_SIZE_8BIT, Rec_Data, 6, i2c_timeout);
     if (status != HAL_OK)
     {
+        mpu6050_last_error = MPU6050_ERROR_READ;
+        mpu6050_last_i2c_error = HAL_I2C_GetError(I2Cx);
         return status;
     }
 
@@ -157,10 +216,12 @@ HAL_StatusTypeDef MPU6050_Read_Gyro(I2C_HandleTypeDef *I2Cx, MPU6050_t *DataStru
 
     // Read 6 BYTES of data starting from GYRO_XOUT_H register
 
-    status = HAL_I2C_Mem_Read(I2Cx, MPU6050_ADDR, GYRO_XOUT_H_REG,
+    status = HAL_I2C_Mem_Read(I2Cx, mpu6050_address, GYRO_XOUT_H_REG,
                               I2C_MEMADD_SIZE_8BIT, Rec_Data, 6, i2c_timeout);
     if (status != HAL_OK)
     {
+        mpu6050_last_error = MPU6050_ERROR_READ;
+        mpu6050_last_i2c_error = HAL_I2C_GetError(I2Cx);
         return status;
     }
 
@@ -187,10 +248,12 @@ HAL_StatusTypeDef MPU6050_Read_Temp(I2C_HandleTypeDef *I2Cx, MPU6050_t *DataStru
 
     // Read 2 BYTES of data starting from TEMP_OUT_H_REG register
 
-    status = HAL_I2C_Mem_Read(I2Cx, MPU6050_ADDR, TEMP_OUT_H_REG,
+    status = HAL_I2C_Mem_Read(I2Cx, mpu6050_address, TEMP_OUT_H_REG,
                               I2C_MEMADD_SIZE_8BIT, Rec_Data, 2, i2c_timeout);
     if (status != HAL_OK)
     {
+        mpu6050_last_error = MPU6050_ERROR_READ;
+        mpu6050_last_i2c_error = HAL_I2C_GetError(I2Cx);
         return status;
     }
 
@@ -207,10 +270,12 @@ HAL_StatusTypeDef MPU6050_Read_All(I2C_HandleTypeDef *I2Cx, MPU6050_t *DataStruc
 
     // Read 14 BYTES of data starting from ACCEL_XOUT_H register
 
-    status = HAL_I2C_Mem_Read(I2Cx, MPU6050_ADDR, ACCEL_XOUT_H_REG,
+    status = HAL_I2C_Mem_Read(I2Cx, mpu6050_address, ACCEL_XOUT_H_REG,
                               I2C_MEMADD_SIZE_8BIT, Rec_Data, 14, i2c_timeout);
     if (status != HAL_OK)
     {
+        mpu6050_last_error = MPU6050_ERROR_READ;
+        mpu6050_last_i2c_error = HAL_I2C_GetError(I2Cx);
         return status;
     }
 
@@ -263,7 +328,29 @@ HAL_StatusTypeDef MPU6050_Read_All(I2C_HandleTypeDef *I2Cx, MPU6050_t *DataStruc
     {
         DataStruct->KalmanAngleX = Kalman_getAngle(&KalmanX, roll, DataStruct->Gx, dt);
     }
+    mpu6050_last_error = MPU6050_ERROR_NONE;
+    mpu6050_last_i2c_error = HAL_I2C_ERROR_NONE;
     return HAL_OK;
+}
+
+MPU6050_Error_t MPU6050_GetLastError(void)
+{
+    return mpu6050_last_error;
+}
+
+uint32_t MPU6050_GetLastI2CError(void)
+{
+    return mpu6050_last_i2c_error;
+}
+
+uint8_t MPU6050_GetDeviceAddress(void)
+{
+    return (uint8_t)(mpu6050_address >> 1);
+}
+
+uint8_t MPU6050_GetWhoAmI(void)
+{
+    return mpu6050_who_am_i;
 }
 
 double Kalman_getAngle(Kalman_t *Kalman, double newAngle, double newRate, double dt)
