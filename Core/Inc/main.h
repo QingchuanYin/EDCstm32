@@ -108,10 +108,10 @@ void Error_Handler(void);
 #define SR04_ECHO_GPIO_Port             GPIOB
 #define SR04_TRIG_Pin                   GPIO_PIN_11
 #define SR04_TRIG_GPIO_Port             GPIOB
-#define AIN2_Pin                        GPIO_PIN_12
-#define AIN2_GPIO_Port                  GPIOB
-#define AIN1_Pin                        GPIO_PIN_13
+#define AIN1_Pin                        GPIO_PIN_12
 #define AIN1_GPIO_Port                  GPIOB
+#define AIN2_Pin                        GPIO_PIN_13
+#define AIN2_GPIO_Port                  GPIOB
 #define BUZZER_Pin                      GPIO_PIN_14
 #define BUZZER_GPIO_Port                GPIOB
 
