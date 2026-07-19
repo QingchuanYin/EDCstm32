@@ -27,6 +27,8 @@ set(MX_Application_Src
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/oled.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/hc_sr04.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/mpu6050.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/imu_filter.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/imu_tracker.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/tb6612_motor.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/tb6612_pid.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../startup_stm32f103xb.s
