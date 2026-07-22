@@ -32,7 +32,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define MOTOR_TEST_PWM_PERCENT 10u
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -63,57 +63,11 @@ static void MX_TIM4_Init(void);
 static void MX_USART1_UART_Init(void);
 void HAL_TIM_MspPostInit(TIM_HandleTypeDef* htim);
 /* USER CODE BEGIN PFP */
-static HAL_StatusTypeDef Motor_TestStartForward(uint32_t duty_percent);
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-static void Motor_TestStop(void)
-{
-  __HAL_TIM_SET_COMPARE(&htim1, PWMA_TIM_CHANNEL, 0u);
-  __HAL_TIM_SET_COMPARE(&htim1, PWMB_TIM_CHANNEL, 0u);
-  (void)HAL_TIM_PWM_Stop(&htim1, PWMA_TIM_CHANNEL);
-  (void)HAL_TIM_PWM_Stop(&htim1, PWMB_TIM_CHANNEL);
-  HAL_GPIO_WritePin(AIN1_GPIO_Port, AIN1_Pin, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(AIN2_GPIO_Port, AIN2_Pin, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(BIN1_GPIO_Port, BIN1_Pin, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(BIN2_GPIO_Port, BIN2_Pin, GPIO_PIN_RESET);
-}
-
-static HAL_StatusTypeDef Motor_TestStartForward(uint32_t duty_percent)
-{
-  uint32_t compare;
-
-  if (duty_percent > 100u)
-  {
-    return HAL_ERROR;
-  }
-
-  compare = ((__HAL_TIM_GET_AUTORELOAD(&htim1) + 1u) * duty_percent) / 100u;
-
-  /* Confirmed forward polarity: A1 is left and B1 is right. */
-  HAL_GPIO_WritePin(AIN1_GPIO_Port, AIN1_Pin, GPIO_PIN_SET);
-  HAL_GPIO_WritePin(AIN2_GPIO_Port, AIN2_Pin, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(BIN1_GPIO_Port, BIN1_Pin, GPIO_PIN_SET);
-  HAL_GPIO_WritePin(BIN2_GPIO_Port, BIN2_Pin, GPIO_PIN_RESET);
-
-  __HAL_TIM_SET_COMPARE(&htim1, PWMA_TIM_CHANNEL, 0u);
-  __HAL_TIM_SET_COMPARE(&htim1, PWMB_TIM_CHANNEL, 0u);
-  if (HAL_TIM_PWM_Start(&htim1, PWMA_TIM_CHANNEL) != HAL_OK)
-  {
-    Motor_TestStop();
-    return HAL_ERROR;
-  }
-  if (HAL_TIM_PWM_Start(&htim1, PWMB_TIM_CHANNEL) != HAL_OK)
-  {
-    Motor_TestStop();
-    return HAL_ERROR;
-  }
-
-  __HAL_TIM_SET_COMPARE(&htim1, PWMA_TIM_CHANNEL, compare);
-  __HAL_TIM_SET_COMPARE(&htim1, PWMB_TIM_CHANNEL, compare);
-  return HAL_OK;
-}
 
 /* USER CODE END 0 */
 
@@ -162,10 +116,6 @@ int main(void)
 
   OLED_Init();
   OLED_ShowFullScreenOne();
-  if (Motor_TestStartForward(MOTOR_TEST_PWM_PERCENT) != HAL_OK)
-  {
-    Error_Handler();
-  }
   /* USER CODE END 2 */
 
   /* Infinite loop */
