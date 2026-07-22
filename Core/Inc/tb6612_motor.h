@@ -63,7 +63,7 @@ typedef enum
 
 typedef struct motor_param_t
 {
-	uint16_t gearRatio;
+	float gearRatio;
 	uint16_t pulsePerRound;
 	float rotateRadius_mm;			/*Measured by mm*/
 }motor_param_t;
@@ -195,7 +195,7 @@ void motor_init_closedloop (motor_t * motor, motor_dataType dataType,					/*Moto
 														TIM_HandleTypeDef * htim, uint32_t channel,				/*PWM init*/
 														TIM_HandleTypeDef * enchtim, motor_bool ifCalInv,	/*Timer-Encoder init*/
 														uint32_t usTickPeriod,														/*Set the period of motor tick*/
-														int gearRatio, int ppr, float radius);						/*Set motor parameters*/
+												float gearRatio, uint16_t ppr, float radius);		/*Set motor parameters*/
 
 void motor_update (motor_t * motor);
 

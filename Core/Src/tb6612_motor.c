@@ -142,9 +142,9 @@ inline float motor_get_position(motor_t * motor)
 void motor_init_closedloop (motor_t * motor, motor_dataType dataType, 
 														pid_typedef * velPID, pid_typedef * posPID,
 														TIM_HandleTypeDef * htim, uint32_t channel,
-														TIM_HandleTypeDef * enchtim, motor_bool ifCalInv,
-														uint32_t usTickPeriod,
-														int gearRatio, int ppr, float radius)
+												TIM_HandleTypeDef * enchtim, motor_bool ifCalInv,
+												uint32_t usTickPeriod,
+												float gearRatio, uint16_t ppr, float radius)
 {
 	motor->initStatus = MOTOR_INITING;
 	motor->data.dataType = dataType;
@@ -215,7 +215,7 @@ void motor_update (motor_t * motor)
 	
 	float dRad = motor->data.rotateDir
 						 * _abs(motor->encoder.totalEncCnt 
-						 / (4.0 * motor->param.gearRatio * motor->param.pulsePerRound))
+						 / (4.0f * motor->param.gearRatio * motor->param.pulsePerRound))
 						 * 2 * _PI;
 	if(motor->data.dataType == rad) {
 		motor->data.position += dRad;
