@@ -20,13 +20,13 @@
 | 2 | PC13 | `PC13` | 未连接板载外设，可作 GPIO/RTC 信号 |
 | 3 | PC14 | `OLED_SCL` | OLED 时钟线 |
 | 4 | PC15 | `OLED_SDA` | OLED 数据线 |
-| 5 | PA0 | `L3` | 循迹传感器 L3 |
-| 6 | PA1 | `L2` | 循迹传感器 L2 |
+| 5 | PA0 | `L3` / `TRACK_OUT` | 8 路模拟灰度模块 OUT（ADC1_IN0） |
+| 6 | PA1 | `L2` / `TRACK_EN` | 灰度模块 74HC4051 低有效 EN |
 | 7 | PA2 | `USART2_RX` | 物理连接陀螺仪模块 TX；当前固件不配置、不使用 |
 | 8 | PA3 | `USART2_TX` | 物理连接陀螺仪模块 RX；当前固件不配置、不使用 |
-| 9 | PA4 | `M` | 循迹传感器中间通道 M |
-| 10 | PA5 | `R2` | 循迹传感器 R2 |
-| 11 | PA6 | `R3` | 循迹传感器 R3 |
+| 9 | PA4 | `M` / `TRACK_AD1` | 灰度模块通道地址 AD1 |
+| 10 | PA5 | `R2` / `TRACK_ERR` | 灰度模块 ERR，仅作诊断输入 |
+| 11 | PA6 | `R3` / `TRACK_NC` | 灰度模块未连接，固件配置为模拟模式 |
 | 12 | PA7 | `KEY1` | 用户按键 KEY1，按下时接 3.3 V |
 | 13 | PB0 | `BIN2` | 电机驱动 B 通道方向输入 2 |
 | 14 | PB1 | `BIN1` | 电机驱动 B 通道方向输入 1 |
@@ -48,14 +48,14 @@
 | 36 | PB8 | `6050_SCL` | MPU6050 与磁传感器 I2C 时钟线 |
 | 35 | PB7 | `PB7` | 电机 A 编码器 CH2（TIM4_CH2） |
 | 34 | PB6 | `PB6` | 电机 A 编码器 CH1（TIM4_CH1） |
-| 33 | PB5 | `L1` | 循迹传感器 L1 |
-| 32 | PB4 | `R1` | 循迹传感器 R1 |
+| 33 | PB5 | `L1` / `TRACK_AD2` | 灰度模块通道地址 AD2 |
+| 32 | PB4 | `R1` / `TRACK_AD0` | 灰度模块通道地址 AD0 |
 | 31 | PB3 | `PB3` | 电机 B 编码器 CH2（TIM2_CH2，全重映射） |
 | 30 | PA15 | `PA15` | 电机 B 编码器 CH1（TIM2_CH1，全重映射） |
 | 29 | PA12 | `KEY2` | 用户按键 KEY2，按下时接 GND |
 | 28 | PA11 | `PWMA` | 电机驱动 A 通道 PWM |
-| 27 | PA10 | `USART1_RX` | USART1 接收；连接 K230 模块 TX |
-| 26 | PA9 | `USART1_TX` | USART1 发送；连接 K230 模块 RX |
+| 27 | PA10 | `USART1_RX` | USART1 接收；连接 K230 TX 或 USB-TTL TXD |
+| 26 | PA9 | `USART1_TX` | USART1 发送；连接 K230 RX 或 USB-TTL RXD |
 | 25 | PA8 | `PWMB` | 电机驱动 B 通道 PWM |
 | 24 | PB15 | `PB15` | 未连接板载外设，可作 GPIO |
 | 23 | PB14 | `I/O` | 蜂鸣器控制信号 |
@@ -68,13 +68,13 @@
 | :--- | :--- |
 | OLED | `OLED_SCL` = PC14，`OLED_SDA` = PC15 |
 | MPU6050 / 磁传感器 I2C | `6050_SCL` = PB8，`6050_SDA` = PB9 |
-| K230 串口 | `USART1_TX` = PA9，`USART1_RX` = PA10 |
+| K230 / USB-TTL 串口 | `USART1_TX` = PA9，`USART1_RX` = PA10 |
 | 陀螺仪串口 | 原理图网络位于 PA2/PA3；当前固件禁用，不配置这两个引脚 |
 | 超声波 | `SR04_TRIG` = PB11，`SR04_ECHO` = PB10 |
 | 电机 A | `PWMA` = PA11，`AIN1` = PB12，`AIN2` = PB13，编码器 = PB6/PB7 |
 | 电机 B | `PWMB` = PA8，`BIN1` = PB1，`BIN2` = PB0，编码器 = PA15/PB3 |
 | 用户按键 | `KEY1` = PA7（按下为高），`KEY2` = PA12（按下为低） |
-| 循迹传感器 | `L3` = PA0，`L2` = PA1，`L1` = PB5，`M` = PA4，`R1` = PB4，`R2` = PA5，`R3` = PA6 |
+| 8 路模拟灰度 | `OUT`=PA0，`EN`=PA1，`AD2`=PB5，`AD1`=PA4，`AD0`=PB4，`ERR`=PA5，PA6 悬空 |
 | 蜂鸣器 | `I/O` = PB14 |
 
 ## 定时器与总线资源
@@ -86,7 +86,7 @@
 | 电机 B 编码器 | TIM2 编码器模式（全重映射），CH1 / PA15、CH2 / PB3 |
 | 超声波回波 | `SR04_ECHO` = PB10 双边沿 EXTI；TIM3 提供 1 MHz 时间基准 |
 | MPU6050 / 磁传感器 | I2C1 重映射到 PB8/PB9，100 kHz |
-| K230 串口 | USART1 / PA9、PA10，115200-8-N-1 |
+| K230 / USB-TTL 串口 | USART1 / PA9、PA10，115200-8-N-1 |
 | 陀螺仪串口 | 禁用；PA2、PA3 保持未配置状态 |
 
 ## 使用注意
@@ -96,7 +96,7 @@
 - `SR04_ECHO` 来自 5 V 供电的 HC-SR04；使用前应确认板上或模块输出是否已做
   3.3 V 电平兼容处理。
 - PA15、PB3、PB4 默认可能被 JTAG 占用。当前底层关闭 JTAG 并保留 SWD，
-  从而将 PA15/PB3 用于电机 B 编码器、PB4 用于循迹 R1。
+  从而将 PA15/PB3 用于电机 B 编码器、PB4 用于灰度模块 AD0。
 - STM32F103 的硬件 USART2 固定为 PA2=TX、PA3=RX，而本板网络定义为
   PA2=`USART2_RX`、PA3=`USART2_TX`，两者方向相反，无法通过 AFIO 互换。
   按当前固件要求，PA2/PA3 不加入 GPIO 或 USART 初始化；若以后需要该接口，

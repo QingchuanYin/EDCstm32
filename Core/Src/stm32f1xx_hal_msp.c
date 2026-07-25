@@ -85,6 +85,25 @@ void HAL_MspInit(void)
 }
 
 /**
+  * @brief ADC MSP Initialization
+  */
+void HAL_ADC_MspInit(ADC_HandleTypeDef* hadc)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+  if (hadc->Instance == ADC1)
+  {
+    __HAL_RCC_ADC_CONFIG(RCC_ADCPCLK2_DIV2);
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+    __HAL_RCC_ADC1_CLK_ENABLE();
+
+    GPIO_InitStruct.Pin = TRACK_OUT_Pin;
+    GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+    HAL_GPIO_Init(TRACK_OUT_GPIO_Port, &GPIO_InitStruct);
+  }
+}
+
+/**
   * @brief I2C MSP Initialization
   */
 void HAL_I2C_MspInit(I2C_HandleTypeDef* hi2c)
@@ -200,6 +219,9 @@ void HAL_UART_MspInit(UART_HandleTypeDef* huart)
     GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     HAL_GPIO_Init(K230_USART1_RX_GPIO_Port, &GPIO_InitStruct);
+
+    HAL_NVIC_SetPriority(USART1_IRQn, 3, 0);
+    HAL_NVIC_EnableIRQ(USART1_IRQn);
   }
 }
 

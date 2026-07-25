@@ -206,6 +206,14 @@ void EXTI15_10_IRQHandler(void)
   HAL_GPIO_EXTI_IRQHandler(SR04_ECHO_Pin);
 }
 
+/**
+  * @brief This function handles USART1 global interrupt.
+  */
+void USART1_IRQHandler(void)
+{
+  HAL_UART_IRQHandler(&huart1);
+}
+
 /* USER CODE BEGIN 1 */
 
 /* USER CODE END 1 */

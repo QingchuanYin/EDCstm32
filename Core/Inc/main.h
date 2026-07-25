@@ -59,16 +59,16 @@ void Error_Handler(void);
 /* Private defines -----------------------------------------------------------*/
 
 /* Board pin map: docs/broad.md */
-#define L3_Pin                          GPIO_PIN_0
-#define L3_GPIO_Port                    GPIOA
-#define L2_Pin                          GPIO_PIN_1
-#define L2_GPIO_Port                    GPIOA
-#define TRACK_M_Pin                     GPIO_PIN_4
-#define TRACK_M_GPIO_Port               GPIOA
-#define R2_Pin                          GPIO_PIN_5
-#define R2_GPIO_Port                    GPIOA
-#define R3_Pin                          GPIO_PIN_6
-#define R3_GPIO_Port                    GPIOA
+#define TRACK_OUT_Pin                   GPIO_PIN_0
+#define TRACK_OUT_GPIO_Port             GPIOA
+#define TRACK_EN_Pin                    GPIO_PIN_1
+#define TRACK_EN_GPIO_Port              GPIOA
+#define TRACK_AD1_Pin                   GPIO_PIN_4
+#define TRACK_AD1_GPIO_Port             GPIOA
+#define TRACK_ERR_Pin                   GPIO_PIN_5
+#define TRACK_ERR_GPIO_Port             GPIOA
+#define TRACK_NC_Pin                    GPIO_PIN_6
+#define TRACK_NC_GPIO_Port              GPIOA
 #define KEY1_Pin                        GPIO_PIN_7
 #define KEY1_GPIO_Port                  GPIOA
 #define PWMB_Pin                        GPIO_PIN_8
@@ -92,10 +92,10 @@ void Error_Handler(void);
 #define BIN1_GPIO_Port                  GPIOB
 #define MOTOR_B_ENCODER_CH2_Pin         GPIO_PIN_3
 #define MOTOR_B_ENCODER_CH2_GPIO_Port   GPIOB
-#define R1_Pin                          GPIO_PIN_4
-#define R1_GPIO_Port                    GPIOB
-#define L1_Pin                          GPIO_PIN_5
-#define L1_GPIO_Port                    GPIOB
+#define TRACK_AD0_Pin                   GPIO_PIN_4
+#define TRACK_AD0_GPIO_Port             GPIOB
+#define TRACK_AD2_Pin                   GPIO_PIN_5
+#define TRACK_AD2_GPIO_Port             GPIOB
 #define MOTOR_A_ENCODER_CH1_Pin         GPIO_PIN_6
 #define MOTOR_A_ENCODER_CH1_GPIO_Port   GPIOB
 #define MOTOR_A_ENCODER_CH2_Pin         GPIO_PIN_7
@@ -121,6 +121,7 @@ void Error_Handler(void);
 #define OLED_SDA_GPIO_Port              GPIOC
 
 extern I2C_HandleTypeDef hi2c1;
+extern ADC_HandleTypeDef hadc1;
 extern TIM_HandleTypeDef htim1;
 extern TIM_HandleTypeDef htim2;
 extern TIM_HandleTypeDef htim3;

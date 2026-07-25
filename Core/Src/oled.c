@@ -194,6 +194,7 @@ void OLED_Init(void)
     OLED_WriteCommand(0x40);
     OLED_WriteCommand(0x81);
     OLED_WriteCommand(0xCF);
+    /* Segment remap: 0xA0=normal, 0xA1=flipped */
     OLED_WriteCommand(0xA1);
     OLED_WriteCommand(0xA6);
     OLED_WriteCommand(0xA8);

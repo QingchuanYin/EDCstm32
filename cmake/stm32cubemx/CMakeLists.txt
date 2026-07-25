@@ -33,6 +33,9 @@ set(MX_Application_Src
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/jgb37_520_pid.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/tb6612_motor.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/tb6612_pid.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/gray_sensor.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/line_follower.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/serial_console.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../startup_stm32f103xb.s
 )
 
@@ -50,6 +53,8 @@ set(STM32_Drivers_Src
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_flash.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_flash_ex.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_exti.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_adc.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_adc_ex.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_i2c.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_tim.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_tim_ex.c

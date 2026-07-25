@@ -90,6 +90,8 @@ cmake --build --preset Release
 - [`docs/TB6612.md`](docs/TB6612.md)：电机驱动与闭环控制说明
 - [`docs/JGB37_520.md`](docs/JGB37_520.md)：JGB37-520 编码器、测速与 PID 说明
 - [`docs/MPU6050.md`](docs/MPU6050.md)：MPU6050 驱动说明
+- [`docs/GRAY_SENSOR.md`](docs/GRAY_SENSOR.md)：8 路纯模拟灰度模块、标定与寻迹说明
+- [`docs/SERIAL_DEBUG.md`](docs/SERIAL_DEBUG.md)：USART1、USB 转 TTL、调试协议与电脑端工具
 
 部分外设驱动来源于第三方项目，修改或分发前请同时检查 `docs/` 中对应的来源与
 许可证文件。

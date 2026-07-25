@@ -21,17 +21,48 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include <string.h>
+
 #include "hc_sr04.h"
+#include "gray_sensor.h"
+#include "line_follower.h"
 #include "oled.h"
+#include "serial_console.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+typedef enum
+{
+  APP_WAIT_WHITE = 0,
+  APP_WAIT_SWEEP,
+  APP_SWEEPING,
+  APP_READY,
+  APP_RUNNING,
+  APP_CAL_FAILED,
+  APP_FAULT
+} AppStateTypeDef;
+
+typedef struct
+{
+  GPIO_TypeDef *port;
+  uint16_t pin;
+  GPIO_PinState active_state;
+  GPIO_PinState raw_state;
+  GPIO_PinState stable_state;
+  uint32_t changed_at_ms;
+} ButtonTypeDef;
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define BUTTON_DEBOUNCE_MS              30u
+#define WHITE_CALIBRATION_SAMPLES       32u
+#define BLACK_CALIBRATION_MS          5000u
+#define READY_SCAN_PERIOD_MS            50u
+#define OLED_REFRESH_MS                250u
+#define SERIAL_OLED_TEXT_MAX            16u
 
 /* USER CODE END PD */
 
@@ -41,6 +72,7 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+ADC_HandleTypeDef hadc1;
 I2C_HandleTypeDef hi2c1;
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
@@ -50,11 +82,24 @@ UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
 HC_SR04_HandleTypeDef hsr04;
+GraySensor_HandleTypeDef gray_sensor;
+LineFollower_HandleTypeDef line_follower;
+ButtonTypeDef key1_button;
+ButtonTypeDef key2_button;
+AppStateTypeDef app_state = APP_WAIT_WHITE;
+uint32_t calibration_started_ms;
+uint32_t last_calibration_scan_ms;
+uint32_t last_ready_scan_ms;
+uint32_t last_oled_refresh_ms;
+uint8_t calibration_failed_channels;
+char serial_oled_text[SERIAL_OLED_TEXT_MAX + 1u];
+uint8_t serial_oled_dirty = 1u;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_ADC1_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_TIM1_Init(void);
 static void MX_TIM2_Init(void);
@@ -63,11 +108,233 @@ static void MX_TIM4_Init(void);
 static void MX_USART1_UART_Init(void);
 void HAL_TIM_MspPostInit(TIM_HandleTypeDef* htim);
 /* USER CODE BEGIN PFP */
+static void App_SetState(AppStateTypeDef state);
+static void App_UpdateDisplay(uint32_t now_ms);
+static void App_GetSerialStatus(SerialConsole_StatusTypeDef *status);
+static bool App_SetSerialDisplay(const char *text);
+static void Button_Init(ButtonTypeDef *button,
+                        GPIO_TypeDef *port,
+                        uint16_t pin,
+                        GPIO_PinState active_state);
+static bool Button_Pressed(ButtonTypeDef *button, uint32_t now_ms);
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+static void Button_Init(ButtonTypeDef *button,
+                        GPIO_TypeDef *port,
+                        uint16_t pin,
+                        GPIO_PinState active_state)
+{
+  GPIO_PinState state = HAL_GPIO_ReadPin(port, pin);
+
+  button->port = port;
+  button->pin = pin;
+  button->active_state = active_state;
+  button->raw_state = state;
+  button->stable_state = state;
+  button->changed_at_ms = HAL_GetTick();
+}
+
+static bool Button_Pressed(ButtonTypeDef *button, uint32_t now_ms)
+{
+  GPIO_PinState raw = HAL_GPIO_ReadPin(button->port, button->pin);
+
+  if (raw != button->raw_state)
+  {
+    button->raw_state = raw;
+    button->changed_at_ms = now_ms;
+  }
+  else if ((raw != button->stable_state) &&
+           ((now_ms - button->changed_at_ms) >= BUTTON_DEBOUNCE_MS))
+  {
+    button->stable_state = raw;
+    return raw == button->active_state;
+  }
+  return false;
+}
+
+static void App_SetState(AppStateTypeDef state)
+{
+  if ((state != APP_RUNNING) && line_follower.enabled)
+  {
+    LineFollower_Stop(&line_follower);
+  }
+  app_state = state;
+  last_oled_refresh_ms = 0u;
+}
+
+static const char *App_StateText(void)
+{
+  if ((app_state == APP_RUNNING) &&
+      (line_follower.state == LINE_FOLLOWER_LOST))
+  {
+    return "LOST ";
+  }
+
+  switch (app_state)
+  {
+    case APP_WAIT_WHITE: return "WHITE";
+    case APP_WAIT_SWEEP: return "SWEEP";
+    case APP_SWEEPING:   return "CAL  ";
+    case APP_READY:      return "READY";
+    case APP_RUNNING:    return "RUN  ";
+    case APP_CAL_FAILED: return "FAIL ";
+    default:             return "FAULT";
+  }
+}
+
+static const char *App_StateProtocolText(void)
+{
+  if ((app_state == APP_RUNNING) &&
+      (line_follower.state == LINE_FOLLOWER_LOST))
+  {
+    return "LOST";
+  }
+
+  switch (app_state)
+  {
+    case APP_WAIT_WHITE: return "WHITE";
+    case APP_WAIT_SWEEP: return "SWEEP";
+    case APP_SWEEPING:   return "CAL";
+    case APP_READY:      return "READY";
+    case APP_RUNNING:    return "RUN";
+    case APP_CAL_FAILED: return "FAIL";
+    default:             return "FAULT";
+  }
+}
+
+static void App_GetSerialStatus(SerialConsole_StatusTypeDef *status)
+{
+  const GraySensor_ResultTypeDef *result =
+      GraySensor_GetResult(&gray_sensor);
+
+  status->state = App_StateProtocolText();
+  status->uptime_ms = HAL_GetTick();
+  status->calibrated = gray_sensor.calibrated;
+  status->line_valid = result->line_valid;
+  status->position = result->position;
+  status->confidence = result->confidence;
+  status->left_duty_percent = line_follower.left_duty_percent;
+  status->right_duty_percent = line_follower.right_duty_percent;
+}
+
+static bool App_SetSerialDisplay(const char *text)
+{
+  size_t length;
+  size_t i;
+
+  if (text == NULL)
+  {
+    return false;
+  }
+  length = strlen(text);
+  if ((length == 0u) || (length > SERIAL_OLED_TEXT_MAX))
+  {
+    return false;
+  }
+  for (i = 0u; i < length; i++)
+  {
+    if (((unsigned char)text[i] < 0x20u) ||
+        ((unsigned char)text[i] > 0x7eu))
+    {
+      return false;
+    }
+  }
+
+  memcpy(serial_oled_text, text, length + 1u);
+  serial_oled_dirty = 1u;
+  last_oled_refresh_ms = 0u;
+  return true;
+}
+
+static void App_UpdateDisplay(uint32_t now_ms)
+{
+  const GraySensor_ResultTypeDef *result;
+  static AppStateTypeDef displayed_state = APP_FAULT;
+  bool state_changed;
+  uint32_t remaining_s;
+
+  if ((displayed_state == app_state) &&
+      ((now_ms - last_oled_refresh_ms) < OLED_REFRESH_MS))
+  {
+    return;
+  }
+  last_oled_refresh_ms = now_ms;
+  result = GraySensor_GetResult(&gray_sensor);
+  state_changed = displayed_state != app_state;
+
+  if (state_changed)
+  {
+    OLED_Clear();
+    OLED_ShowString(0u, 0u, "8CH TRACK");
+    OLED_ShowString(0u, 1u, "State:");
+    displayed_state = app_state;
+  }
+  OLED_ShowString(42u, 1u, App_StateText());
+
+  if (app_state == APP_WAIT_WHITE)
+  {
+    OLED_ShowString(0u, 3u, "On white ground");
+    OLED_ShowString(0u, 5u, "K1: capture white");
+  }
+  else if (app_state == APP_WAIT_SWEEP)
+  {
+    OLED_ShowString(0u, 3u, "Move across line");
+    OLED_ShowString(0u, 5u, "K1: start 5 sec");
+  }
+  else if (app_state == APP_SWEEPING)
+  {
+    remaining_s = BLACK_CALIBRATION_MS -
+                  (now_ms - calibration_started_ms);
+    remaining_s = (remaining_s + 999u) / 1000u;
+    OLED_ShowString(0u, 3u, "Sweep all 8 CH");
+    OLED_ShowString(0u, 5u, "Remain:");
+    OLED_ShowNum(48u, 5u, remaining_s, 1u);
+    OLED_ShowString(54u, 5u, "s ");
+  }
+  else if (app_state == APP_CAL_FAILED)
+  {
+    OLED_ShowString(0u, 3u, "Bad CH mask:");
+    OLED_ShowNum(78u, 3u, calibration_failed_channels, 3u);
+    OLED_ShowString(0u, 5u, "K1: retry white");
+  }
+  else if ((app_state == APP_READY) || (app_state == APP_RUNNING))
+  {
+    OLED_ShowString(0u, 2u, "Line:");
+    OLED_ShowString(30u, 2u, result->line_valid ? "YES" : "NO ");
+    OLED_ShowString(0u, 3u, "Pos:");
+    OLED_ShowSignedNum(30u, 3u, result->position, 4u);
+    OLED_ShowString(72u, 3u, "C:");
+    OLED_ShowNum(84u, 3u, result->confidence, 4u);
+    OLED_ShowString(0u, 4u, "P:");
+    OLED_ShowNum(12u, 4u, result->peak, 4u);
+    OLED_ShowString(48u, 4u, "D:");
+    OLED_ShowNum(60u, 4u, result->contrast, 4u);
+    OLED_ShowString(0u, 5u, "L:");
+    OLED_ShowNum(12u, 5u, line_follower.left_duty_percent, 2u);
+    OLED_ShowString(30u, 5u, "R:");
+    OLED_ShowNum(42u, 5u, line_follower.right_duty_percent, 2u);
+    OLED_ShowString(66u, 5u, "ERR:");
+    OLED_ShowNum(90u, 5u,
+                 (result->err_state == GPIO_PIN_SET) ? 1u : 0u, 1u);
+    OLED_ShowString(0u, 7u,
+                    (app_state == APP_READY) ? "K2: start" : "K2: stop ");
+  }
+  else
+  {
+    OLED_ShowString(0u, 3u, "ADC/control error");
+    OLED_ShowString(0u, 5u, "Reset required");
+  }
+  if (state_changed || (serial_oled_dirty != 0u))
+  {
+    OLED_ShowString(0u, 6u, "UART:");
+    OLED_ShowString(30u, 6u, "                ");
+    OLED_ShowString(30u, 6u, serial_oled_text);
+    serial_oled_dirty = 0u;
+  }
+}
 
 /* USER CODE END 0 */
 
@@ -100,6 +367,7 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_ADC1_Init();
   MX_I2C1_Init();
   MX_TIM1_Init();
   MX_TIM2_Init();
@@ -115,7 +383,24 @@ int main(void)
   }
 
   OLED_Init();
-  OLED_ShowFullScreenOne();
+  OLED_Clear();
+  if (GraySensor_Init(&gray_sensor, &hadc1, &htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (LineFollower_Init(&line_follower, &gray_sensor, &htim1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  Button_Init(&key1_button, KEY1_GPIO_Port, KEY1_Pin, GPIO_PIN_SET);
+  Button_Init(&key2_button, KEY2_GPIO_Port, KEY2_Pin, GPIO_PIN_RESET);
+  App_SetState(APP_WAIT_WHITE);
+  if (SerialConsole_Init(&huart1,
+                         App_GetSerialStatus,
+                         App_SetSerialDisplay) != HAL_OK)
+  {
+    Error_Handler();
+  }
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -125,8 +410,130 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    uint32_t now_ms = HAL_GetTick();
+
+    SerialConsole_Process(now_ms);
+
+    if (Button_Pressed(&key1_button, now_ms))
+    {
+      if ((app_state == APP_WAIT_WHITE) ||
+          (app_state == APP_READY) ||
+          (app_state == APP_CAL_FAILED))
+      {
+        LineFollower_Stop(&line_follower);
+        if (GraySensor_CaptureWhite(&gray_sensor,
+                                    WHITE_CALIBRATION_SAMPLES) == HAL_OK)
+        {
+          App_SetState(APP_WAIT_SWEEP);
+        }
+        else
+        {
+          App_SetState(APP_FAULT);
+        }
+      }
+      else if (app_state == APP_WAIT_SWEEP)
+      {
+        if (GraySensor_BeginBlackCalibration(&gray_sensor) == HAL_OK)
+        {
+          calibration_started_ms = now_ms;
+          last_calibration_scan_ms = now_ms - LINE_FOLLOWER_PERIOD_MS;
+          App_SetState(APP_SWEEPING);
+        }
+        else
+        {
+          App_SetState(APP_FAULT);
+        }
+      }
+    }
+
+    if (app_state == APP_SWEEPING)
+    {
+      if ((now_ms - last_calibration_scan_ms) >= LINE_FOLLOWER_PERIOD_MS)
+      {
+        last_calibration_scan_ms = now_ms;
+        if (GraySensor_UpdateBlackCalibration(&gray_sensor) != HAL_OK)
+        {
+          App_SetState(APP_FAULT);
+        }
+      }
+      if ((app_state == APP_SWEEPING) &&
+          ((now_ms - calibration_started_ms) >= BLACK_CALIBRATION_MS))
+      {
+        if (GraySensor_FinishBlackCalibration(
+              &gray_sensor, &calibration_failed_channels))
+        {
+          App_SetState(APP_READY);
+        }
+        else
+        {
+          App_SetState(APP_CAL_FAILED);
+        }
+      }
+    }
+
+    if (Button_Pressed(&key2_button, now_ms))
+    {
+      if (app_state == APP_READY)
+      {
+        if (LineFollower_Start(&line_follower) == HAL_OK)
+        {
+          App_SetState(APP_RUNNING);
+        }
+      }
+      else if (app_state == APP_RUNNING)
+      {
+        LineFollower_Stop(&line_follower);
+        App_SetState(APP_READY);
+      }
+    }
+
+    if ((app_state == APP_RUNNING) &&
+        (LineFollower_Update(&line_follower, now_ms) != HAL_OK))
+    {
+      App_SetState(APP_FAULT);
+    }
+
+    if ((app_state == APP_READY) &&
+        ((now_ms - last_ready_scan_ms) >= READY_SCAN_PERIOD_MS))
+    {
+      last_ready_scan_ms = now_ms;
+      if (GraySensor_Scan(&gray_sensor) != HAL_OK)
+      {
+        App_SetState(APP_FAULT);
+      }
+    }
+    App_UpdateDisplay(now_ms);
   }
   /* USER CODE END 3 */
+}
+
+/**
+  * @brief ADC1 Initialization Function
+  * @retval None
+  */
+static void MX_ADC1_Init(void)
+{
+  ADC_ChannelConfTypeDef sConfig = {0};
+
+  hadc1.Instance = ADC1;
+  hadc1.Init.ScanConvMode = ADC_SCAN_DISABLE;
+  hadc1.Init.ContinuousConvMode = DISABLE;
+  hadc1.Init.DiscontinuousConvMode = DISABLE;
+  hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
+  hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+  hadc1.Init.NbrOfConversion = 1;
+  if (HAL_ADC_Init(&hadc1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  sConfig.Channel = ADC_CHANNEL_0;
+  sConfig.Rank = ADC_REGULAR_RANK_1;
+  sConfig.SamplingTime = ADC_SAMPLETIME_55CYCLES_5;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
 }
 
 /**
@@ -390,6 +797,11 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOB, BIN2_Pin|BIN1_Pin|SR04_TRIG_Pin|AIN2_Pin
                            |AIN1_Pin|BUZZER_Pin, GPIO_PIN_RESET);
 
+  /* Keep the analog multiplexer disabled until a scan starts. */
+  HAL_GPIO_WritePin(TRACK_EN_GPIO_Port, TRACK_EN_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(TRACK_AD1_GPIO_Port, TRACK_AD1_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, TRACK_AD0_Pin|TRACK_AD2_Pin, GPIO_PIN_RESET);
+
   /* OLED software I2C */
   GPIO_InitStruct.Pin = OLED_SCL_Pin|OLED_SDA_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
@@ -414,16 +826,25 @@ static void MX_GPIO_Init(void)
   HAL_NVIC_SetPriority(EXTI15_10_IRQn, 2, 0);
   HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
 
-  /* Line tracking sensor digital inputs */
-  GPIO_InitStruct.Pin = L3_Pin|L2_Pin|TRACK_M_Pin|R2_Pin|R3_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  /* 74HC4051 enable and address outputs. */
+  GPIO_InitStruct.Pin = TRACK_EN_Pin|TRACK_AD1_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  GPIO_InitStruct.Pin = R1_Pin|L1_Pin;
+  GPIO_InitStruct.Pin = TRACK_AD0_Pin|TRACK_AD2_Pin;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /* ERR is diagnostic only; PA6 is deliberately left in analog mode. */
+  GPIO_InitStruct.Pin = TRACK_ERR_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  HAL_GPIO_Init(TRACK_ERR_GPIO_Port, &GPIO_InitStruct);
+
+  GPIO_InitStruct.Pin = TRACK_NC_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+  HAL_GPIO_Init(TRACK_NC_GPIO_Port, &GPIO_InitStruct);
 
   /* KEY1 is active high; KEY2 is active low. */
   GPIO_InitStruct.Pin = KEY1_Pin;
